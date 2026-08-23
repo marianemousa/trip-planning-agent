@@ -174,6 +174,62 @@ _ROUTE_TOOL: dict = {
 }
 
 
+# Per-tool parameter specs used by _validate_arguments.
+# "kind" is "str" or "num"; "required" controls whether absence triggers clarification.
+_ARG_SPECS: dict = {
+    "get_weather": [
+        {"name": "location", "required": True,  "kind": "str"},
+        {"name": "date",     "required": True,  "kind": "str"},
+    ],
+    "get_travel_time": [
+        {"name": "origin",      "required": True,  "kind": "str"},
+        {"name": "destination", "required": True,  "kind": "str"},
+        {"name": "mode",        "required": False, "kind": "str"},
+    ],
+    "convert_currency": [
+        {"name": "amount",        "required": True, "kind": "num"},
+        {"name": "from_currency", "required": True, "kind": "str"},
+        {"name": "to_currency",   "required": True, "kind": "str"},
+    ],
+}
+
+
+def _validate_arguments(tool: str, args: dict):
+    """Check args against _ARG_SPECS.
+
+    Mutates args in place to coerce int→float for numeric params.
+    Returns (is_valid, clarifying_question | None).
+    """
+    for spec in _ARG_SPECS.get(tool, []):
+        name = spec["name"]
+        value = args.get(name)
+        label = name.replace("_", " ")
+
+        missing = value is None or (isinstance(value, str) and not value.strip())
+        if missing:
+            if spec["required"]:
+                return False, (
+                    f"I need a {label} to complete this request — could you provide one?"
+                )
+            continue
+
+        if spec["kind"] == "num":
+            if not isinstance(value, (int, float)):
+                return False, (
+                    f"The {label} should be a number, but I received {value!r}. "
+                    "Could you clarify the amount?"
+                )
+            args[name] = float(value)  # safe coercion: int literals → float
+        elif spec["kind"] == "str":
+            if not isinstance(value, str):
+                return False, (
+                    f"Expected {label} to be text, but received a "
+                    f"{type(value).__name__} value — could you rephrase?"
+                )
+
+    return True, None
+
+
 def route(request: str) -> RoutingDecision:
     """Route *request* to a tool, execute it, and return a complete RoutingDecision.
 
@@ -212,8 +268,16 @@ def route(request: str) -> RoutingDecision:
     if decision is None:
         raise RuntimeError("Model did not call route_request — unexpected response.")
 
-    # Tool-call path: execute the mock tool, then generate the natural-language response.
+    # Tool-call path: validate args, execute the mock tool, then generate the natural-language response.
     if decision.tool_called and not decision.needs_clarification:
+        valid, question = _validate_arguments(decision.tool_called, decision.arguments)
+        if not valid:
+            decision.needs_clarification = True
+            decision.clarifying_question = question
+            decision.response = question
+            decision.arguments = {}
+            return decision
+
         tool_fn = TOOL_REGISTRY.get(decision.tool_called)
         if tool_fn is None:
             decision.response = f"Unknown tool: {decision.tool_called}"

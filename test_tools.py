@@ -11,6 +11,7 @@ Coverage:
 
 import pytest
 
+from agent import _validate_arguments
 from tools import convert_currency, get_travel_time, get_weather
 
 
@@ -242,3 +243,110 @@ class TestConvertCurrency:
         result = convert_currency(42.0, "FOO", "BAR")
         assert result["converted_amount"] == pytest.approx(42.0)
         assert result["exchange_rate"] == pytest.approx(1.0)
+
+
+# ── _validate_arguments ───────────────────────────────────────────────────────
+
+class TestValidateArguments:
+
+    # Valid inputs — should always return (True, None) ─────────────────────────
+
+    def test_weather_valid(self):
+        assert _validate_arguments("get_weather", {"location": "London", "date": "2025-09-01"}) == (True, None)
+
+    def test_travel_valid_with_mode(self):
+        args = {"origin": "Berlin", "destination": "Munich", "mode": "driving"}
+        assert _validate_arguments("get_travel_time", args) == (True, None)
+
+    def test_travel_valid_without_mode(self):
+        args = {"origin": "Berlin", "destination": "Munich"}
+        assert _validate_arguments("get_travel_time", args) == (True, None)
+
+    def test_currency_valid_int_amount(self):
+        args = {"amount": 250, "from_currency": "USD", "to_currency": "JPY"}
+        valid, _ = _validate_arguments("convert_currency", args)
+        assert valid is True
+
+    def test_currency_coerces_int_to_float(self):
+        args = {"amount": 100, "from_currency": "USD", "to_currency": "EUR"}
+        _validate_arguments("convert_currency", args)
+        assert isinstance(args["amount"], float)
+        assert args["amount"] == 100.0
+
+    def test_currency_float_amount_unchanged(self):
+        args = {"amount": 99.5, "from_currency": "USD", "to_currency": "EUR"}
+        _validate_arguments("convert_currency", args)
+        assert args["amount"] == 99.5
+
+    def test_unknown_tool_passes(self):
+        """No spec for unknown tools — validator returns valid rather than crashing."""
+        assert _validate_arguments("no_such_tool", {"x": 1}) == (True, None)
+
+    # Missing required args — should return (False, non-empty question) ─────────
+
+    def test_weather_missing_location(self):
+        valid, q = _validate_arguments("get_weather", {"date": "tomorrow"})
+        assert valid is False
+        assert q and "location" in q
+
+    def test_weather_missing_date(self):
+        valid, q = _validate_arguments("get_weather", {"location": "Paris"})
+        assert valid is False
+        assert q and "date" in q
+
+    def test_weather_empty_location(self):
+        valid, q = _validate_arguments("get_weather", {"location": "", "date": "today"})
+        assert valid is False
+        assert q is not None
+
+    def test_weather_blank_location(self):
+        valid, q = _validate_arguments("get_weather", {"location": "   ", "date": "today"})
+        assert valid is False
+        assert q is not None
+
+    def test_travel_missing_origin(self):
+        valid, q = _validate_arguments("get_travel_time", {"destination": "Munich"})
+        assert valid is False
+        assert q and "origin" in q
+
+    def test_travel_missing_destination(self):
+        valid, q = _validate_arguments("get_travel_time", {"origin": "Berlin"})
+        assert valid is False
+        assert q and "destination" in q
+
+    def test_currency_missing_amount(self):
+        valid, q = _validate_arguments("convert_currency", {"from_currency": "USD", "to_currency": "EUR"})
+        assert valid is False
+        assert q and "amount" in q
+
+    def test_currency_missing_from_currency(self):
+        valid, q = _validate_arguments("convert_currency", {"amount": 100.0, "to_currency": "EUR"})
+        assert valid is False
+        assert q and "from currency" in q
+
+    # Wrong types — should return (False, non-empty question) ──────────────────
+
+    def test_currency_string_amount(self):
+        args = {"amount": "one hundred", "from_currency": "USD", "to_currency": "EUR"}
+        valid, q = _validate_arguments("convert_currency", args)
+        assert valid is False
+        assert q and "amount" in q
+
+    def test_weather_numeric_location(self):
+        args = {"location": 42, "date": "today"}
+        valid, q = _validate_arguments("get_weather", args)
+        assert valid is False
+        assert q is not None
+
+    def test_travel_list_origin(self):
+        args = {"origin": ["Berlin"], "destination": "Munich"}
+        valid, q = _validate_arguments("get_travel_time", args)
+        assert valid is False
+        assert q is not None
+
+    # Optional arg absent is fine — no clarification triggered ─────────────────
+
+    def test_travel_optional_mode_absent_is_valid(self):
+        valid, q = _validate_arguments("get_travel_time", {"origin": "A", "destination": "B"})
+        assert valid is True
+        assert q is None
