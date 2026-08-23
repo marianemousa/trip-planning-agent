@@ -324,10 +324,21 @@ class TestValidateArguments:
         assert valid is False
         assert q and "from currency" in q
 
+    def test_currency_missing_to_currency(self):
+        valid, q = _validate_arguments("convert_currency", {"amount": 100.0, "from_currency": "USD"})
+        assert valid is False
+        assert q and "to currency" in q
+
     # Wrong types — should return (False, non-empty question) ──────────────────
 
     def test_currency_string_amount(self):
         args = {"amount": "one hundred", "from_currency": "USD", "to_currency": "EUR"}
+        valid, q = _validate_arguments("convert_currency", args)
+        assert valid is False
+        assert q and "amount" in q
+
+    def test_currency_bool_amount_rejected(self):
+        args = {"amount": True, "from_currency": "USD", "to_currency": "EUR"}
         valid, q = _validate_arguments("convert_currency", args)
         assert valid is False
         assert q and "amount" in q

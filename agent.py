@@ -214,7 +214,7 @@ def _validate_arguments(tool: str, args: dict):
             continue
 
         if spec["kind"] == "num":
-            if not isinstance(value, (int, float)):
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
                 return False, (
                     f"The {label} should be a number, but I received {value!r}. "
                     "Could you clarify the amount?"
@@ -255,7 +255,7 @@ def route(request: str) -> RoutingDecision:
             inp = block.input
             decision = RoutingDecision(
                 tool_called=inp.get("tool_called"),
-                arguments=inp.get("arguments", {}),
+                arguments=inp.get("arguments") or {},
                 confidence=inp["confidence"],
                 needs_clarification=inp["needs_clarification"],
                 clarifying_question=inp.get("clarifying_question"),
@@ -268,11 +268,16 @@ def route(request: str) -> RoutingDecision:
     if decision is None:
         raise RuntimeError("Model did not call route_request — unexpected response.")
 
+    # Enforce response == clarifying_question verbatim regardless of what the model wrote.
+    if decision.needs_clarification and decision.clarifying_question is not None:
+        decision.response = decision.clarifying_question
+
     # Tool-call path: validate args, execute the mock tool, then generate the natural-language response.
     if decision.tool_called and not decision.needs_clarification:
         valid, question = _validate_arguments(decision.tool_called, decision.arguments)
         if not valid:
             decision.needs_clarification = True
+            decision.tool_called = None
             decision.clarifying_question = question
             decision.response = question
             decision.arguments = {}
@@ -306,7 +311,8 @@ def route(request: str) -> RoutingDecision:
             ],
         )
         decision.response = next(
-            (b.text for b in summary.content if b.type == "text"), ""
+            (b.text for b in summary.content if b.type == "text"),
+            "The tool ran successfully but I was unable to generate a summary.",
         )
 
     return decision
