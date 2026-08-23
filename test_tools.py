@@ -23,7 +23,7 @@ VALID_CONDITIONS = {"sunny", "partly cloudy", "overcast", "rainy", "stormy"}
 TRAVEL_KEYS = {"origin", "destination", "mode", "duration_minutes", "distance_km"}
 VALID_MODES = {"driving", "walking", "transit"}
 
-CURRENCY_KEYS = {"amount", "from_currency", "to_currency", "converted_amount", "exchange_rate", "note"}
+CURRENCY_KEYS = {"amount", "from_currency", "to_currency", "converted_amount", "exchange_rate"}
 
 
 # ── get_weather ───────────────────────────────────────────────────────────────
@@ -141,15 +141,13 @@ class TestGetTravelTime:
 
     # Invalid argument values ──────────────────────────────────────────────────
 
-    def test_unknown_mode_falls_back_without_crashing(self):
-        """Unknown modes use the driving base (45 min); no exception is raised."""
-        result = get_travel_time("A", "B", mode="teleport")
-        assert result["mode"] == "teleport"
-        assert result["duration_minutes"] >= 5
+    def test_unknown_mode_raises(self):
+        with pytest.raises(ValueError, match="teleport"):
+            get_travel_time("A", "B", mode="teleport")
 
-    def test_unknown_mode_echoed_in_output(self):
-        result = get_travel_time("A", "B", mode="supersonic")
-        assert result["mode"] == "supersonic"
+    def test_unknown_mode_error_names_supported_modes(self):
+        with pytest.raises(ValueError, match="driving"):
+            get_travel_time("A", "B", mode="supersonic")
 
 
 # ── convert_currency ──────────────────────────────────────────────────────────
@@ -191,11 +189,6 @@ class TestConvertCurrency:
         assert isinstance(result["converted_amount"], float)
         assert result["converted_amount"] > 0
 
-    def test_note_field_is_string(self):
-        result = convert_currency(100, "USD", "EUR")
-        assert isinstance(result["note"], str)
-        assert len(result["note"]) > 0
-
     def test_converted_amount_is_float(self):
         result = convert_currency(100, "USD", "GBP")
         assert isinstance(result["converted_amount"], float)
@@ -224,25 +217,17 @@ class TestConvertCurrency:
 
     # Invalid argument values ──────────────────────────────────────────────────
 
-    def test_unknown_from_currency_falls_back_to_rate_one(self):
-        """Unrecognised currency codes silently use rate 1.0 (USD-equivalent).
-        This means the caller gets a number back, not an error.
-        The routing layer is responsible for rejecting invalid codes before calling."""
-        result = convert_currency(100, "FAKE", "USD")
-        assert result["from_currency"] == "FAKE"
-        # FAKE=1.0, USD=1.0 → 100/1.0*1.0 = 100
-        assert result["converted_amount"] == pytest.approx(100.0)
+    def test_unknown_from_currency_raises(self):
+        with pytest.raises(ValueError, match="FAKE"):
+            convert_currency(100, "FAKE", "USD")
 
-    def test_unknown_to_currency_falls_back_to_rate_one(self):
-        result = convert_currency(100, "USD", "MARS")
-        assert result["to_currency"] == "MARS"
-        assert result["converted_amount"] == pytest.approx(100.0)
+    def test_unknown_to_currency_raises(self):
+        with pytest.raises(ValueError, match="MARS"):
+            convert_currency(100, "USD", "MARS")
 
-    def test_both_unknown_currencies_still_returns_amount(self):
-        """Two unknown currencies cancel out (both rate=1.0), amount unchanged."""
-        result = convert_currency(42.0, "FOO", "BAR")
-        assert result["converted_amount"] == pytest.approx(42.0)
-        assert result["exchange_rate"] == pytest.approx(1.0)
+    def test_unknown_currency_error_names_supported_currencies(self):
+        with pytest.raises(ValueError, match="EUR"):
+            convert_currency(100, "FOO", "BAR")
 
 
 # ── _validate_arguments ───────────────────────────────────────────────────────

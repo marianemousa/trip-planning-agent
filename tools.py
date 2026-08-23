@@ -17,7 +17,11 @@ def get_weather(location: str, date: str) -> dict:
 
 def get_travel_time(origin: str, destination: str, mode: str = "driving") -> dict:
     base_minutes = {"driving": 45, "walking": 120, "transit": 70}
-    minutes = base_minutes.get(mode, 45) + random.randint(-15, 30)
+    if mode not in base_minutes:
+        raise ValueError(
+            f"Unknown travel mode {mode!r}. Supported modes: driving, walking, transit."
+        )
+    minutes = base_minutes[mode] + random.randint(-15, 30)
     return {
         "origin": origin,
         "destination": destination,
@@ -34,16 +38,24 @@ def convert_currency(amount: float, from_currency: str, to_currency: str) -> dic
         "JPY": 149.5, "CAD": 1.360, "AUD": 1.530, "CHF": 0.900,
         "INR": 83.1, "BRL": 4.970, "MXN": 17.15,
     }
-    from_rate = rates.get(from_currency.upper(), 1.0)
-    to_rate = rates.get(to_currency.upper(), 1.0)
-    converted = amount / from_rate * to_rate
+    supported = ", ".join(sorted(rates))
+    from_upper = from_currency.upper()
+    to_upper = to_currency.upper()
+    if from_upper not in rates:
+        raise ValueError(
+            f"Unsupported currency {from_upper!r}. Supported currencies: {supported}."
+        )
+    if to_upper not in rates:
+        raise ValueError(
+            f"Unsupported currency {to_upper!r}. Supported currencies: {supported}."
+        )
+    converted = amount / rates[from_upper] * rates[to_upper]
     return {
         "amount": amount,
-        "from_currency": from_currency.upper(),
-        "to_currency": to_currency.upper(),
+        "from_currency": from_upper,
+        "to_currency": to_upper,
         "converted_amount": round(converted, 2),
-        "exchange_rate": round(to_rate / from_rate, 6),
-        "note": "Mock rate — not a live quote",
+        "exchange_rate": round(rates[to_upper] / rates[from_upper], 6),
     }
 
 

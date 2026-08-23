@@ -1,4 +1,24 @@
-"""Run all 13 routing test cases and report pass/fail against expected behaviour."""
+"""
+Integration runner for all 13 routing test cases.
+
+Requires a live Anthropic API key — each case calls the real Claude API via
+agent.route() and checks that the routing decision matches the expected
+behaviour defined below.
+
+Usage
+-----
+    export ANTHROPIC_API_KEY=sk-ant-...
+    python tests.py
+
+The script prints a per-case PASS/FAIL with the full routing decision and a
+summary at the end. Cases 7, 12, and 13 are "soft" — multiple outcomes are
+acceptable — and are checked only for internal consistency rather than an
+exact expected tool.
+
+For offline (mocked) routing tests, see test_routing.py (requires API key,
+uses unittest with @skipUnless guard). For unit tests of the tool functions
+themselves with no API key, see test_tools.py.
+"""
 
 import json
 from dataclasses import dataclass

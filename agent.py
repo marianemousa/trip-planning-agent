@@ -290,8 +290,8 @@ def route(request: str) -> RoutingDecision:
 
         try:
             tool_result = tool_fn(**decision.arguments)
-        except TypeError as exc:
-            decision.response = f"I wasn't able to complete that — bad arguments: {exc}"
+        except (TypeError, ValueError) as exc:
+            decision.response = f"I wasn't able to complete that — {exc}"
             return decision
 
         summary = client.messages.create(
