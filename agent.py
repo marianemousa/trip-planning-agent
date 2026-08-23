@@ -1,7 +1,11 @@
 """Route a natural-language request to the right tool using Claude."""
 
+import json
+
 import anthropic
+
 from schema import RoutingDecision
+from tools import TOOL_REGISTRY
 
 _SYSTEM_PROMPT = """\
 You are a routing agent. Analyse the user's request and fill in a routing decision \
@@ -39,6 +43,12 @@ RULE 1 — Required arg missing with no reasonable default
   → Do NOT guess. Do NOT invent a placeholder value.
   Examples: "What's the weather?" (no location, no date); "Convert 50 dollars" (no target currency).
 
+RULE 1b — Required arg present but clearly invalid
+  → Treat the same as missing: needs_clarification: true.
+  → Identify the invalid value in the clarifying_question.
+  Examples: an unrecognised currency code ("Mars credits"), a nonsensical travel mode ("teleport").
+  Do NOT pass an invalid value through to arguments.
+
 RULE 2 — Required arg present but vague, and a sensible default exists
   → Proceed. Resolve the vague value to a concrete one.
   → Log every inference in assumptions_made (e.g. "resolved 'downtown' to city centre",
@@ -70,6 +80,15 @@ CONFIDENCE CALIBRATION
 • "high"   — intent unambiguous, all args explicit, zero inference.
 • "medium" — intent clear, but ≥1 arg was inferred (Rule 2) or a secondary tool exists (Rule 5).
 • "low"    — intent or tool match is genuinely uncertain even after applying the rules above.
+
+═══════════════════════════════════════════════════════
+RESPONSE FIELD
+═══════════════════════════════════════════════════════
+Always populate "response" — it is what the user sees:
+• needs_clarification=true → copy clarifying_question here verbatim.
+• tool_called=null         → write a direct, concise answer (1–2 sentences).
+• tool_called=<tool>       → leave as an empty string ""; the framework
+                             executes the tool and populates this field.
 """
 
 # Routing decision schema surfaced as a tool so Claude returns structured JSON.
@@ -131,6 +150,15 @@ _ROUTE_TOOL: dict = {
                 "type": "string",
                 "description": "One or two sentences explaining the routing decision.",
             },
+            "response": {
+                "type": "string",
+                "description": (
+                    "Text shown directly to the user. "
+                    "needs_clarification=true → copy clarifying_question verbatim. "
+                    "tool_called=null → write a direct 1–2 sentence answer. "
+                    "tool_called=<tool> → leave as empty string ''."
+                ),
+            },
         },
         "required": [
             "tool_called",
@@ -140,16 +168,22 @@ _ROUTE_TOOL: dict = {
             "clarifying_question",
             "assumptions_made",
             "reasoning",
+            "response",
         ],
     },
 }
 
 
 def route(request: str) -> RoutingDecision:
-    """Send *request* to Claude and return a structured RoutingDecision."""
+    """Route *request* to a tool, execute it, and return a complete RoutingDecision.
+
+    For clarification and direct-answer cases the response is filled by the
+    routing model. For tool calls the mock tool is executed and a second
+    Claude call generates the natural-language response from the result.
+    """
     client = anthropic.Anthropic()
 
-    response = client.messages.create(
+    routing_response = client.messages.create(
         model="claude-opus-5",
         max_tokens=1024,
         thinking={"type": "adaptive"},
@@ -159,11 +193,11 @@ def route(request: str) -> RoutingDecision:
         messages=[{"role": "user", "content": request}],
     )
 
-    # The model is forced to call route_request — find that block.
-    for block in response.content:
+    decision = None
+    for block in routing_response.content:
         if block.type == "tool_use" and block.name == "route_request":
             inp = block.input
-            return RoutingDecision(
+            decision = RoutingDecision(
                 tool_called=inp.get("tool_called"),
                 arguments=inp.get("arguments", {}),
                 confidence=inp["confidence"],
@@ -171,6 +205,44 @@ def route(request: str) -> RoutingDecision:
                 clarifying_question=inp.get("clarifying_question"),
                 assumptions_made=inp.get("assumptions_made", []),
                 reasoning=inp["reasoning"],
+                response=inp.get("response", ""),
             )
+            break
 
-    raise RuntimeError("Model did not call route_request — unexpected response.")
+    if decision is None:
+        raise RuntimeError("Model did not call route_request — unexpected response.")
+
+    # Tool-call path: execute the mock tool, then generate the natural-language response.
+    if decision.tool_called and not decision.needs_clarification:
+        tool_fn = TOOL_REGISTRY.get(decision.tool_called)
+        if tool_fn is None:
+            decision.response = f"Unknown tool: {decision.tool_called}"
+            return decision
+
+        try:
+            tool_result = tool_fn(**decision.arguments)
+        except TypeError as exc:
+            decision.response = f"I wasn't able to complete that — bad arguments: {exc}"
+            return decision
+
+        summary = client.messages.create(
+            model="claude-opus-5",
+            max_tokens=256,
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"User asked: {request}\n\n"
+                        f"Tool: {decision.tool_called}\n"
+                        f"Result:\n{json.dumps(tool_result, indent=2)}\n\n"
+                        "Write a brief, natural-language answer using the tool result. "
+                        "Two or three sentences at most."
+                    ),
+                }
+            ],
+        )
+        decision.response = next(
+            (b.text for b in summary.content if b.type == "text"), ""
+        )
+
+    return decision

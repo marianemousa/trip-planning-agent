@@ -11,6 +11,7 @@ class RoutingDecision:
     clarifying_question: Optional[str]
     assumptions_made: List[str]
     reasoning: str
+    response: str
 
     def to_dict(self) -> dict:
         return {
@@ -21,4 +22,5 @@ class RoutingDecision:
             "clarifying_question": self.clarifying_question,
             "assumptions_made": self.assumptions_made,
             "reasoning": self.reasoning,
+            "response": self.response,
         }

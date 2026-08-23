@@ -11,11 +11,12 @@ decisions match the ambiguity policy defined in agent.py.  They are
 intentionally NOT mocked: the point is to catch regressions in prompt
 behaviour, not in Python parsing logic.
 
-Each test specifies:
-  - the natural-language input
-  - the expected routing outcome (tool_called, needs_clarification, etc.)
-  - where the outcome is ambiguous, a note explains which multiple valid
-    outputs are accepted (soft assertions)
+response field contract
+-----------------------
+• needs_clarification=true  → response == clarifying_question (verbatim copy per prompt)
+• tool_called=<tool>        → response is non-empty natural-language answer generated
+                              from the mock tool result (second Claude call in agent.py)
+• tool_called=null          → response is a direct answer (1-2 sentences)
 
 To convert a test into a mocked unit test for offline development, wrap
 the route() call in:
@@ -45,6 +46,9 @@ class TestRouting(unittest.TestCase):
         self.assertFalse(d.needs_clarification)
         self.assertIsNone(d.clarifying_question)
         self.assertEqual(d.assumptions_made, [])
+        # response: natural-language summary of weather result
+        self.assertIsInstance(d.response, str)
+        self.assertGreater(len(d.response), 0)
 
     # 2 ── clear single tool: get_travel_time ─────────────────────────────────
 
@@ -56,6 +60,9 @@ class TestRouting(unittest.TestCase):
         self.assertEqual(d.arguments.get("mode"), "driving")
         self.assertEqual(d.confidence, "high")
         self.assertFalse(d.needs_clarification)
+        # response: natural-language travel-time summary
+        self.assertIsInstance(d.response, str)
+        self.assertGreater(len(d.response), 0)
 
     # 3 ── clear single tool: convert_currency ────────────────────────────────
 
@@ -68,6 +75,9 @@ class TestRouting(unittest.TestCase):
         self.assertEqual(d.confidence, "high")
         self.assertFalse(d.needs_clarification)
         self.assertEqual(d.assumptions_made, [])
+        # response: natural-language conversion result
+        self.assertIsInstance(d.response, str)
+        self.assertGreater(len(d.response), 0)
 
     # 4 ── no tool needed: in-scope general knowledge ─────────────────────────
 
@@ -77,6 +87,9 @@ class TestRouting(unittest.TestCase):
         self.assertEqual(d.arguments, {})
         self.assertFalse(d.needs_clarification)
         self.assertIsNone(d.clarifying_question)
+        # response: direct answer from Claude
+        self.assertIsInstance(d.response, str)
+        self.assertGreater(len(d.response), 0)
 
     # 5 ── missing required arg: no location for weather ──────────────────────
 
@@ -86,6 +99,8 @@ class TestRouting(unittest.TestCase):
         self.assertIsNotNone(d.clarifying_question)
         self.assertIsNone(d.tool_called)
         self.assertEqual(d.arguments, {})
+        # response must be the clarifying question verbatim
+        self.assertEqual(d.response, d.clarifying_question)
 
     # 6 ── missing required arg: no target currency ───────────────────────────
 
@@ -94,6 +109,8 @@ class TestRouting(unittest.TestCase):
         self.assertTrue(d.needs_clarification)
         self.assertIsNotNone(d.clarifying_question)
         self.assertIsNone(d.tool_called)
+        # response must be the clarifying question verbatim
+        self.assertEqual(d.response, d.clarifying_question)
 
     # 7 ── "the city" has no referent — Rule 1, not Rule 2 ────────────────────
 
@@ -102,6 +119,8 @@ class TestRouting(unittest.TestCase):
         self.assertTrue(d.needs_clarification)
         self.assertIsNotNone(d.clarifying_question)
         self.assertIsNone(d.tool_called)
+        # response must be the clarifying question verbatim
+        self.assertEqual(d.response, d.clarifying_question)
 
     # 8 ── optional mode omitted → silent default, NOT logged ─────────────────
 
@@ -119,6 +138,9 @@ class TestRouting(unittest.TestCase):
             mode_logged,
             "Optional arg default 'driving' should not appear in assumptions_made (Rule 3)",
         )
+        # response: natural-language travel-time summary
+        self.assertIsInstance(d.response, str)
+        self.assertGreater(len(d.response), 0)
 
     # 9 ── multi-tool: travel primary, weather secondary ──────────────────────
 
@@ -132,6 +154,9 @@ class TestRouting(unittest.TestCase):
         self.assertFalse(d.needs_clarification)
         # Prompt requires secondary tool to be named in reasoning
         self.assertIn("get_weather", d.reasoning)
+        # response: natural-language travel-time summary
+        self.assertIsInstance(d.response, str)
+        self.assertGreater(len(d.response), 0)
 
     # 10 ── out of scope ───────────────────────────────────────────────────────
 
@@ -139,6 +164,9 @@ class TestRouting(unittest.TestCase):
         d = route("Can you book me a hotel in Rome for next weekend?")
         self.assertIsNone(d.tool_called)
         self.assertFalse(d.needs_clarification)
+        # response: direct explanation from Claude
+        self.assertIsInstance(d.response, str)
+        self.assertGreater(len(d.response), 0)
 
     # 11 ── present but invalid arg: unrecognised currency code ───────────────
 
@@ -148,17 +176,19 @@ class TestRouting(unittest.TestCase):
         self.assertIsNotNone(d.clarifying_question)
         self.assertIsNone(d.tool_called)
         self.assertEqual(d.arguments, {})
+        # response must be the clarifying question verbatim
+        self.assertEqual(d.response, d.clarifying_question)
 
     # 12 ── ambiguous entity: multiple Springfields (soft) ────────────────────
     # Acceptable: clarification OR get_weather with assumption logged.
 
     def test_12_ambiguous_springfield(self):
         d = route("What's the weather in Springfield tomorrow?")
+        self.assertIsInstance(d.response, str)
+        self.assertGreater(len(d.response), 0, "response must be non-empty")
         if d.needs_clarification:
-            self.assertIsNotNone(
-                d.clarifying_question,
-                "needs_clarification=true requires a clarifying_question",
-            )
+            self.assertIsNotNone(d.clarifying_question)
+            self.assertEqual(d.response, d.clarifying_question)
         else:
             self.assertEqual(d.tool_called, "get_weather")
             self.assertTrue(
@@ -172,6 +202,8 @@ class TestRouting(unittest.TestCase):
     def test_13_ambiguous_weather_or_knowledge(self):
         d = route("What's Reykjavik like this time of year?")
         self.assertFalse(d.needs_clarification)
+        self.assertIsInstance(d.response, str)
+        self.assertGreater(len(d.response), 0, "response must be non-empty")
         if d.tool_called == "get_weather":
             self.assertIn("location", d.arguments)
             self.assertIn("date", d.arguments)
