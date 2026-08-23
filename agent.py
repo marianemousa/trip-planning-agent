@@ -4,39 +4,85 @@ import anthropic
 from schema import RoutingDecision
 
 _SYSTEM_PROMPT = """\
-You are a routing agent. Given a user's natural-language request, decide which of \
-these three tools to call, extract the arguments, and fill in the routing decision.
+You are a routing agent. Analyse the user's request and fill in a routing decision \
+that maps it to one of the three tools below.
 
-Available tools:
+═══════════════════════════════════════════════════════
+AVAILABLE TOOLS
+═══════════════════════════════════════════════════════
 1. get_weather(location: str, date: str)
-   - Use for weather, forecast, temperature, rain, conditions at a place and time.
-   - location: city or place name
-   - date: ISO date (YYYY-MM-DD) or relative like "today", "tomorrow", "next Friday"
+   Triggers: weather, forecast, temperature, rain, wind, conditions.
+   • location [REQUIRED] — city, district, or named place.
+   • date     [REQUIRED] — ISO date (YYYY-MM-DD) or relative ("today", "tomorrow",
+                           "next Friday", "this weekend").
 
 2. get_travel_time(origin: str, destination: str, mode: str = "driving")
-   - Use for trip duration, commute time, how long to get somewhere.
-   - mode: one of "driving", "walking", "transit" — default "driving" if unspecified.
+   Triggers: travel time, commute, how long to get somewhere, drive/walk/transit time.
+   • origin      [REQUIRED] — departure place.
+   • destination [REQUIRED] — arrival place.
+   • mode        [OPTIONAL, default "driving"] — one of "driving", "walking", "transit".
 
 3. convert_currency(amount: float, from_currency: str, to_currency: str)
-   - Use for currency conversion, exchange rates, "how much is X in Y".
-   - Currencies as ISO 4217 codes (USD, EUR, GBP, JPY, …).
+   Triggers: currency conversion, exchange rate, "how much is X in Y currency".
+   • amount        [REQUIRED] — numeric value to convert.
+   • from_currency [REQUIRED] — ISO 4217 source code (USD, EUR, GBP, JPY, …).
+   • to_currency   [REQUIRED] — ISO 4217 target code.
 
-Rules for the decision:
-- Set needs_clarification=true when required parameters are genuinely ambiguous or missing
-  and you cannot make a reasonable assumption (e.g. no location at all for weather).
-- Set confidence="high" when intent and args are crystal-clear.
-- Set confidence="medium" when you inferred something but it's a reasonable guess.
-- Set confidence="low" when the request could plausibly match multiple tools or is vague.
-- assumptions_made lists every inference you made (can be empty).
-- If tool_called is null, still fill in reasoning explaining why no tool matched.
+═══════════════════════════════════════════════════════
+AMBIGUITY POLICY — follow exactly, in order
+═══════════════════════════════════════════════════════
+
+RULE 1 — Required arg missing with no reasonable default
+  → needs_clarification: true
+  → Set clarifying_question to the single most useful question that unblocks routing.
+  → Leave arguments: {} and tool_called: null.
+  → Do NOT guess. Do NOT invent a placeholder value.
+  Examples: "What's the weather?" (no location, no date); "Convert 50 dollars" (no target currency).
+
+RULE 2 — Required arg present but vague, and a sensible default exists
+  → Proceed. Resolve the vague value to a concrete one.
+  → Log every inference in assumptions_made (e.g. "resolved 'downtown' to city centre",
+    "interpreted 'next Tuesday' as 2025-03-18").
+  → Set confidence: "medium" unless everything else is clear.
+  Examples: "Weather in Paris next Tuesday" → resolve date; "Drive from downtown to the airport" → resolve origin.
+
+RULE 3 — Optional arg missing
+  → Use the documented default silently.
+  → Do NOT mention it in assumptions_made.
+  Example: travel time with no mode → use "driving", say nothing.
+
+RULE 4 — Request maps to no tool
+  → tool_called: null, needs_clarification: false.
+  → In reasoning: if the question is answerable from general knowledge (e.g. "What is the capital of France?"),
+    say so and call it "in-scope general knowledge". If it is completely outside scope
+    (e.g. "Write me a poem"), say it is out of scope.
+
+RULE 5 — Request could map to 2 or more tools
+  → Pick the single most prominent intent as tool_called.
+  → In reasoning, name the secondary tool and explain why you deprioritised it.
+  → Set confidence: "medium" or "low" depending on how ambiguous the split is.
+  Example: "How long to drive to Rome and what will the weather be like?" → primary: get_travel_time,
+           note get_weather as secondary.
+
+═══════════════════════════════════════════════════════
+CONFIDENCE CALIBRATION
+═══════════════════════════════════════════════════════
+• "high"   — intent unambiguous, all args explicit, zero inference.
+• "medium" — intent clear, but ≥1 arg was inferred (Rule 2) or a secondary tool exists (Rule 5).
+• "low"    — intent or tool match is genuinely uncertain even after applying the rules above.
 """
 
 # Routing decision schema surfaced as a tool so Claude returns structured JSON.
 _ROUTE_TOOL: dict = {
     "name": "route_request",
     "description": (
-        "Record the routing decision: which tool to call, with what arguments, "
-        "and metadata about confidence and assumptions."
+        "Record the routing decision. "
+        "Apply the ambiguity policy before filling in each field: "
+        "ask when a required arg is truly missing (Rule 1), "
+        "infer and log when it is merely vague (Rule 2), "
+        "silently default optional args (Rule 3), "
+        "null-route out-of-scope requests (Rule 4), "
+        "pick a primary tool and note secondary needs (Rule 5)."
     ),
     "input_schema": {
         "type": "object",
@@ -61,16 +107,25 @@ _ROUTE_TOOL: dict = {
             },
             "needs_clarification": {
                 "type": "boolean",
-                "description": "True when the request is too ambiguous to route confidently.",
+                "description": (
+                    "True only when a REQUIRED arg is missing AND no reasonable default exists "
+                    "(Rule 1). False for vague-but-resolvable args (Rule 2) and missing optional args (Rule 3)."
+                ),
             },
             "clarifying_question": {
                 "anyOf": [{"type": "string"}, {"type": "null"}],
-                "description": "Question to resolve ambiguity, or null.",
+                "description": (
+                    "The single most useful question that unblocks routing. "
+                    "Set only when needs_clarification is true; null otherwise."
+                ),
             },
             "assumptions_made": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Every inference or default applied when interpreting the request.",
+                "description": (
+                    "One entry per inference made under Rule 2 (vague-but-resolvable args). "
+                    "Do NOT list Rule 3 optional-arg defaults here."
+                ),
             },
             "reasoning": {
                 "type": "string",
