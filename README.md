@@ -4,7 +4,7 @@ Hi Samir, Mariam, and Sona!
 
 This is my submission for the agentic assistant exercise. Below is a quick overview of what was built and how it maps to what you asked for.
 
-## What we built
+## What I built
 
 A small agent that takes a natural-language request and routes it to one of three mock tools:
 
