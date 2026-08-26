@@ -4,7 +4,7 @@ Hi Samir, Mariam, and Sona!
 
 This is my submission for the agentic assistant exercise. Below is a quick overview of what was built and how it maps to what you asked for.
 
-## What we built
+## What I built
 
 A small agent that takes a natural-language request and routes it to one of three mock tools:
 
@@ -55,6 +55,6 @@ Every field is always present, even when null — the goal was something a downs
 
 ## Scope notes
 
-Given the 60-minute framing, a few things were intentionally left out. Details are in my submission email, but briefly: this wasn't tested end-to-end locally (would have required setting up a dedicated API key + frontend for testing), and a sub-agent review pass was run but its recommendations weren't applied. If this were headed to production, I'd apply the sub-agent recommendations, add a proper frontend, broaden test coverage with integration tests, define evals, and wire up observability via LangSmith.
+Given the 60-minute framing, a few things were intentionally left out. Details are in my submission email, but briefly: this wasn't tested end-to-end locally (would have required setting up a dedicated API key + frontend for testing). If this were headed to production, I'd spend more time manually reviewing the code, add a proper frontend, broaden test coverage with integration tests, define evals, and wire up observability via LangSmith.
 
 Looking forward to discussing!
